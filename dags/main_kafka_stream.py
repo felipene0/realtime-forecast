@@ -34,47 +34,42 @@ kafka_conf = {
     'session.timeout.ms': 6000,
 }
 
-# ¨¨¨¨
-# @dag(
-#     dag_id = 'seek_temperature',
-#     default_args = default_args,
-#     schedule = '@daily',
-#     start_date=datetime(2025,1,1),
-#     catchup=False
-# )
-# def main():
-    
-#     start = EmptyOperator(task_id='start')
-#     end = EmptyOperator(task_id='end')
-    
-# @task(task_id='get_data')
-def get_data():
-    try:
-        data = requests.get(API, params= params)
-        data.raise_for_status()
-        data = data.json()
+@dag(
+    dag_id="seek_temperature",
+    default_args=default_args,
+    schedule="@daily",
+    catchup=False
+)
+def main():
+    start = EmptyOperator(task_id='start')
+    end = EmptyOperator(task_id='end')
         
-        return data
-        # logging.info(data)
-
-    except requests.RequestException as e:
-        logging.error(f'Error fetching data: {e}')
+    @task(task_id='get_data')
+    def get_data():
+        try:
+            data = requests.get(API, params=params)
+            data.raise_for_status()
+            return data.json()
+        except requests.RequestException as e:
+            logging.error(f'Error fetching data: {e}')
+            return None
         
-# @task(task_id='stream_data')
-def stream_data(data):
-    producer = Producer(kafka_conf)
-    try:
-        msg = json.dumps(data).encode('utf-8')
-        producer.produce(KAFKA_TOPIC, value=msg)
-        producer.flush()
-        logging.info('Message sent to Kafka sucessfully')
-    except KafkaException as e:
-        logging.info(f'Kafka error: {e}')
+    @task(task_id='stream_data')
+    def stream_data(data):
+        if data is None:
+            logging.error("No data received")
+            return
         
-# get_data >> stream_data
+        producer = Producer(kafka_conf)
+        try:
+            msg = json.dumps(data).encode('utf-8')
+            producer.produce(KAFKA_TOPIC, value=msg)
+            producer.flush()
+            logging.info('Message sent to Kafka sucessfully')
+        except KafkaException as e:
+            logging.info(f'Kafka error: {e}')
         
-if __name__ == '__main__':
-    res = get_data()
-    stream_data(res)
-    
-    # main()
+    data = get_data()
+    start >> data >> stream_data(data) >> end
+        
+main()
