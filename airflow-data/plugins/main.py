@@ -8,12 +8,11 @@ from spark_conn import create_spark_connection
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
 load_dotenv()
-
-KAFKA_SERVER = os.getenv('KAFKA_SERVER')
-KAFKA_TOPIC = os.getenv('KAFKA_TOPIC')
         
 def spark_connection_to_kafka(s_conn):
     try:
+        KAFKA_SERVER = os.getenv('KAFKA_SERVER')
+        KAFKA_TOPIC = os.getenv('KAFKA_TOPIC')
         df = (s_conn.readStream
                 .format('kafka')
                 .option('kafka.bootstrap.servers', KAFKA_SERVER)
@@ -27,6 +26,9 @@ def spark_connection_to_kafka(s_conn):
         return None
         
 def kafka_to_mongo():
+    MONGODB_URI = os.getenv('MONGODB_URI')
+    MONGO_DATABASE = os.getenv('MONGO_DATABASE')
+    MONGO_COLLECTION = os.getenv('MONGO_COLLECTION')
     # Create spark session
     s_conn = create_spark_connection()
     if s_conn is None:
@@ -52,9 +54,13 @@ def kafka_to_mongo():
         ]), False),
     ])
     
+    logging.info('Schema created!')
+    
     df = (df.selectExpr("CAST(value AS STRING)")
             .select(from_json(col("value"), schema).alias("data"))
             .select("data.*"))
+    
+    logging.info('Started Stream')
     
     query = (df.writeStream
                 .option("checkpointLocation", "/tmp/checkpoints/")
