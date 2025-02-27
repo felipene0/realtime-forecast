@@ -1,4 +1,3 @@
 .env
 .log
-airflow-data/logs/scheduler/2025-02-25/
-airflow-data/logs/dag_processor_manager/
+airflow-data/logs/*
