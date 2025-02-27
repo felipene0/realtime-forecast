@@ -183,7 +183,7 @@ services:
     command: bash -c "pip install -r /opt/airflow/requirements.txt && airflow celery worker"
     build:
       context: .
-      dockerfile: Dockerfile.airflow-worker
+      dockerfile: Dockerfile
     depends_on:
       - redis
       - postgres

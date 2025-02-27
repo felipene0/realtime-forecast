@@ -66,7 +66,6 @@ def main():
         if response is None:
             logging.error("No data received")
             return 
-        
         producer = Producer(kafka_conf)
         try:
             msg = json.dumps(response).encode('utf-8')
@@ -75,26 +74,22 @@ def main():
             logging.info('Message sent to Kafka sucessfully')
         except KafkaException as e:
             logging.info(f'Kafka error: {e}')
-            
-    @task(task_id='create_spark_connection')
+    # TODO create a second file to deal with spark connections 
     def create_spark_connection():
         try:
             s_conn = (SparkSession.builder
-                    .master("spark://spark-master:7077")
-                    .appName('SparkStream')
-                    .config("spark.jars.packages", "org.mongodb.spark:mongo-spark-connector_2.12:3.0.1")
-                    .config("spark.mongodb.write.connection.uri", MONGODB_URI)
-                    .config("spark.mongodb.write.database", MONGO_DATABASE)
-                    .config("spark.mongodb.write.collection", MONGO_COLLECTION)
-                    .getOrCreate()
-                    )              
-            logging.info("Spark connection created!") 
+                      .appName('SparkStream')
+                      .config("spark.jars.packages", "org.mongodb.spark:mongo-spark-connector_2.12:3.0.1")
+                      .config("spark.mongodb.write.connection.uri", MONGODB_URI)
+                      .config("spark.mongodb.write.database", MONGO_DATABASE)
+                      .config("spark.mongodb.write.collection", MONGO_COLLECTION)
+                      .getOrCreate())
+            logging.info("Spark connection created!")
             return s_conn
         except Exception as e:
-            logging.error(f"Couldn't create spark session: {e}")
+            logging.error(f"Couldn't create Spark session: {e}")
             return None
             
-    @task(task_id='spark_connection_to_kafka')
     def spark_connection_to_kafka(s_conn):
         df = None
         try:
@@ -103,16 +98,27 @@ def main():
                   .option('kafka.bootstrap.servers', KAFKA_SERVER)
                   .option('subscribe', KAFKA_TOPIC)
                   .option('startingOffsets', 'earliest')
-                  .load()
-                )           
+                  .load())           
             logging.info('Kafka dataframe created!') 
             return df
         except Exception as e:
             logging.warning(f"Couldn't create kafka dataframe: {e}")
             return None
             
-    @task(task_id='spark_to_mongodb')
-    def spark_to_mongodb(df, s_conn):
+    @task(task_id='kafka_to_mongo')
+    def kafka_to_mongo():
+        # Create spark session
+        s_conn = create_spark_connection()
+        if s_conn is None:
+            logging.error("Failed to create SparkSession")
+            return
+        # Create kafka dataframe
+        df = spark_connection_to_kafka(s_conn)
+        if df is None:
+            logging.error("Failed to create Kafka DataFrame")
+            s_conn.stop()
+            return
+        
         if df is None or s_conn is None:
             logging.error("No dataframe or Spark Session available")
             return
@@ -130,10 +136,9 @@ def main():
             ]), False),
         ])
         
-        df = (df.selectExpr("CAST(value as string)")
-                .select(from_json(col("value"), schema).alias("data"))
-                .select("data.*")
-        )
+        df = (df.selectExpr("CAST(value AS STRING)")
+              .select(from_json(col("value"), schema).alias("data"))
+              .select("data.*"))
         
         query = (df.writeStream
                  .option("checkpointLocation", "/tmp/checkpoints/")
@@ -141,17 +146,14 @@ def main():
                  .option("spark.mongodb.database", MONGO_DATABASE)
                  .option("spark.mongodb.collection", MONGO_COLLECTION)
                  .outputMode("append")
-                 .start()
-        )
+                 .start())
         
         query.awaitTermination()
         
-    response = get_data()
-    s_conn = create_spark_connection()
-    stream = stream_data(response)
-    
-    kafka_df = spark_connection_to_kafka(s_conn)
-    
-    start >> response >> s_conn >> stream >> kafka_df >> spark_to_mongodb(kafka_df, s_conn) >> end
+    get_data_task = get_data()
+    stream_data_task = stream_data(get_data_task)
+    process_task = kafka_to_mongo()
+
+    start >> get_data_task >> stream_data_task >> process_task >> end   
 
 main()
